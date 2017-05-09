@@ -36,9 +36,9 @@ namespace rutracker
             buttonStopSearch.Enabled = false;
             buttonContinueSearch.Enabled = false;
 
-            //path = "C:\\Users\\Dev\\Documents\\backup.20170208185701.xml";
+            path = "C:\\Users\\Dev\\Documents\\backup.20170208185701.xml";
 
-            path = ".\\backup.20170208185701.xml";
+            //path = ".\\backup.20170208185701.xml";
             if (!File.Exists(path))
             {
                 OpenFileDialog ofd = new OpenFileDialog();
