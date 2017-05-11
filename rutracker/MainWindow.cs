@@ -10,6 +10,7 @@ using System.Windows.Forms;
 using System.IO;
 
 using System.Xml;
+using System.Data.SQLite;
 
 using System.Threading;
 
@@ -22,7 +23,8 @@ namespace rutracker
         List<structTorrent> foundTor;
         bool continueSearch, eof, endCyrcle;
         int countTorrents = 0, countTorrentsFound = 0;
-        string path, stateProg = "Состояние: ";
+        string path, stateProg = "Состояние: ", strCFT = "Количество найденых торрентов: ";
+        bool sqLite;
 
         Thread threadSearch;
         delegate void delegateAddRow(structTorrent _st);
@@ -37,6 +39,8 @@ namespace rutracker
             buttonContinueSearch.Enabled = false;
 
             path = "C:\\Users\\Dev\\Documents\\backup.20170208185701.xml";
+            labelState.Text = stateProg;
+            lableCountFoundTor.Text = strCFT;
 
             //path = ".\\backup.20170208185701.xml";
             if (!File.Exists(path))
@@ -56,20 +60,184 @@ namespace rutracker
         {
             if (threadSearch.IsAlive)
             {
-                string strCT = "Количество торрентов: ", strCFT = "Количество найденых торрентов: ";
                 continueSearch = false;
                 labelState.Text = stateProg + " остановка поиска";
                 while (threadSearch.IsAlive) ;
                 threadSearch.Abort();
                 threadSearch = new Thread(Search);
-                LableCountTorrents.Text = strCT + countTorrents.ToString();
-                LableCountFoundTor.Text = strCFT + countTorrentsFound.ToString();
+                lableCountFoundTor.Text = strCFT + countTorrentsFound.ToString();
                 labelState.Text = stateProg + " поиск остановлен";
                 buttonNewSearch.Enabled = true;
                 buttonStopSearch.Enabled = false;
                 buttonContinueSearch.Enabled = true;
             }
         }
+
+        private void xmlВSqLiteToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            OpenFileDialog ofd = new OpenFileDialog();
+            ofd.InitialDirectory = "c:\\";
+            ofd.Filter = "xml files (*.xml)|*xml";
+            ofd.RestoreDirectory = true;
+
+            ofd.ShowDialog();
+
+            if (ofd.FileName != "")
+            {
+                XmlReader xmlToSqlReader = XmlReader.Create(ofd.FileName);
+                string sqlDbTorrents, sqlDbContent, nameElement="";
+                if (File.Exists("torrents.sqlite"))
+                {
+                    File.Delete("torrents.sqlite");
+                }
+                if (File.Exists("content.sqlite"))
+                {
+                    File.Delete("content.sqlite");
+                }
+                
+                int countInTransaction = 0;
+
+                SQLiteConnection.CreateFile("torrents.sqlite");
+                SQLiteConnection.CreateFile("content.sqlite");
+
+                SQLiteConnection m_dbTorrentsConnection = new SQLiteConnection("Data Source=torrents.sqlite;Version=3;");
+                SQLiteConnection m_dbContentConnection = new SQLiteConnection("Data Source=content.sqlite;Version=3;");
+
+
+                m_dbTorrentsConnection.Open();
+                sqlDbTorrents= "CREATE TABLE[torrents](" +
+                    "[id_topic] integer NOT NULL, " +
+                    "[registred_at] integer NOT NULL, " +
+                    "[size] integer NOT NULL, " +
+                    "[title] text NOT NULL, " +
+                    "[magnet] text NOT NULL, " +
+                    "[id_forum] integer NOT NULL, " +
+                    "[forum_name] text NOT NULL ); ";
+                SQLiteTransaction transTorrents = m_dbTorrentsConnection.BeginTransaction();
+                SQLiteCommand commandToDbTorrents = new SQLiteCommand(sqlDbTorrents, m_dbTorrentsConnection);
+                commandToDbTorrents.ExecuteNonQuery();
+                commandToDbTorrents.Transaction = transTorrents;
+
+                m_dbContentConnection.Open();
+                sqlDbContent = "CREATE TABLE[content] (" +
+                    "[id_topic] integer NOT NULL, " +
+                    "[content] text NOT NULL ); "; 
+                SQLiteTransaction transContent = m_dbContentConnection.BeginTransaction();
+                SQLiteCommand commandToDbContent = new SQLiteCommand(sqlDbContent, m_dbContentConnection);
+                commandToDbContent.ExecuteNonQuery();
+                commandToDbContent.Transaction = transContent;
+
+                structTorrent temp = new structTorrent();
+                while (xmlToSqlReader.Read())
+                {
+                    switch (xmlToSqlReader.NodeType)
+                    {
+                        case XmlNodeType.Element:
+                            switch (xmlToSqlReader.Name)
+                            {
+                                case "torrent":
+                                    nameElement = xmlToSqlReader.Name;
+                                    temp.idTopic = Int32.Parse(xmlToSqlReader.GetAttribute("id"));
+                                    temp.registred_at = DateTime.Parse(xmlToSqlReader.GetAttribute("registred_at"));
+                                    temp.setSize(Int64.Parse(xmlToSqlReader.GetAttribute("size")));
+                                    temp.magnetURL = "";
+                                    temp.content = "";
+                                    countTorrents++;
+                                    break;
+                                case "title":
+                                    nameElement = xmlToSqlReader.Name;
+                                    break;
+                                case "magnet":
+                                    nameElement = xmlToSqlReader.Name;
+                                    break;
+                                case "forum":
+                                    nameElement = xmlToSqlReader.Name;
+                                    temp.idForum = Int32.Parse(xmlToSqlReader.GetAttribute("id"));
+                                    break;
+                                case "content":
+                                    nameElement = xmlToSqlReader.Name;
+                                    break;
+                            }
+                            break;
+                        case XmlNodeType.CDATA:
+                            switch (nameElement)
+                            {
+                                case "title":
+                                    temp.titel = xmlToSqlReader.Value;
+                                    break;
+                                case "magnet":
+                                    temp.magnetURL = xmlToSqlReader.Value;
+                                    break;
+                                case "forum":
+                                    temp.forumName = xmlToSqlReader.Value;
+                                    break;
+                                case "content":
+                                    temp.content = xmlToSqlReader.Value;
+                                    break;
+                            }
+                            break;
+                        case XmlNodeType.EndElement:
+                            if (xmlToSqlReader.Name == "torrent")
+                            {
+                                if (countInTransaction == 20000)
+                                {
+
+                                    transTorrents.Commit();
+                                    transContent.Commit();
+
+                                    transTorrents = m_dbTorrentsConnection.BeginTransaction();
+                                    transContent = m_dbContentConnection.BeginTransaction();
+
+                                    countInTransaction = 0;
+                                }
+
+                                var date = new DateTime(1970, 1, 1, 0, 0, 0, temp.registred_at.Kind);
+                                var unixTimestamp = System.Convert.ToInt64((temp.registred_at - date).TotalSeconds);
+
+                                sqlDbTorrents = "INSERT INTO [torrents] ([id_topic], [registred_at], [size], [title], [magnet], [id_forum], [forum_name]) VALUES (";
+                                sqlDbTorrents += temp.idTopic.ToString() + ", '" + unixTimestamp.ToString() + "', " + temp.sizeByts.ToString() + ", '" + temp.titel.Replace("'", "''") + "', '" + temp.magnetURL + "', "  + temp.idForum.ToString() + ", '" + temp.forumName.Replace("'", "''") + "');";
+
+                                commandToDbTorrents.CommandText = sqlDbTorrents;
+                                commandToDbTorrents.ExecuteNonQuery();
+
+                                sqlDbContent = "INSERT INTO [content] ([id_topic], [content]) VALUES (";
+                                sqlDbContent += temp.idTopic.ToString() + ", '" + temp.content.Replace("'", "''") + "');";
+                                commandToDbContent.CommandText = sqlDbContent;
+                                commandToDbContent.ExecuteNonQuery();
+
+                                countInTransaction++;
+                            }
+                            break;
+                    }
+                }
+                
+                transTorrents.Commit();
+                transContent.Commit();
+
+                m_dbTorrentsConnection.Close();
+                m_dbContentConnection.Close();
+            }
+        }
+
+        private void sqlInsetCommandTorrent(structTorrent temp, SQLiteConnection dbConTorrent)
+        {
+            var date = new DateTime(1970, 1, 1, 0, 0, 0, temp.registred_at.Kind);
+            var unixTimestamp = System.Convert.ToInt64((temp.registred_at - date).TotalSeconds);
+
+            string sqlDbTorrents = "INSERT INTO [torrents] ([id_topic], [registred_at], [size], [title], [id_forum], [forum_name]) VALUES (";
+            sqlDbTorrents += temp.idTopic.ToString() + ", '" + unixTimestamp.ToString() + "', " + temp.sizeByts.ToString() + ", '" + temp.titel.Replace("'", "''") + "', " + temp.idForum.ToString() + ", '" + temp.forumName.Replace("'", "''") + "');";
+            SQLiteCommand commandToDbTorrents = new SQLiteCommand(sqlDbTorrents, dbConTorrent);
+            commandToDbTorrents.ExecuteNonQuery();
+        }
+
+        private void sqlInsetCommandContent(structTorrent temp, SQLiteConnection dbConContent)
+        {
+            string sqlDbContent = "INSERT INTO [content] ([id_topic], [content], [magnet]) VALUES (";
+            sqlDbContent += temp.idTopic.ToString() + ", '" + temp.content.Replace("'", "''") + "', '" + temp.magnetURL + "');";
+            SQLiteCommand commandToDbContent = new SQLiteCommand(sqlDbContent, dbConContent);
+            commandToDbContent.ExecuteNonQuery();
+        }
+
 
         private void buttonNewSearch_Click(object sender, MouseEventArgs e)
         {
@@ -107,46 +275,7 @@ namespace rutracker
                 buttonContinueSearch.Enabled = false;
             }
         }
-        /*
-        private void SearchButtonClick(object sender, MouseEventArgs e)
-        {
-            if (threadSearch == null)
-            {
-                threadSearch = new Thread(Search);
-            }
-            if (threadSearch.IsAlive)
-            {
-                string strCT = "Количество торрентов: ", strCFT = "Количество найденых торрентов: ";
-                continueSearch = false;
-                this.buttonNewSearch.Text = "Поиск";
-                labelState.Text = stateProg + " остановка поиска";
-                while (threadSearch.IsAlive);
-                threadSearch.Abort();
-                threadSearch = new Thread(Search);
-                LableCountTorrents.Text = strCT + countTorrents.ToString();
-                LableCountFoundTor.Text = strCFT + countTorrentsFound.ToString();
-                labelState.Text = stateProg + " поиск остановлен";
-            }
-            else
-            {
-                if (reader.EOF)
-                {
-                    reader = XmlReader.Create(path);
-                    foundTor = new List<structTorrent>();
-                    countTorrents = 0;
-                    countTorrentsFound = 0;
-                    FoundItemsView.Rows.Clear();
-                }
-                continueSearch = true;
-                if(threadSearch.ThreadState == ThreadState.Unstarted)
-                {
-                    this.buttonNewSearch.Text = "Стоп";
-                    threadSearch.Start();
-                    labelState.Text = stateProg + " идет поиск";
-                }
-            }
-        }
-        */
+        
         private void Search()
         {
             string[] SearchParts = textFieldSearch.Text.Split(' ');
@@ -155,8 +284,7 @@ namespace rutracker
 
             string nameElement = "";
             bool suitable = false;
-
-            endCyrcle = false;
+            
             while (reader.Read() && continueSearch)
             {
                 switch (reader.NodeType)
